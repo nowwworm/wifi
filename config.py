@@ -5,8 +5,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if TELEGRAM_BOT_TOKEN:
+    TELEGRAM_BOT_TOKEN = TELEGRAM_BOT_TOKEN.strip()
+
 ADMIN_TELEGRAM_ID_RAW = os.getenv("ADMIN_TELEGRAM_ID")
+if ADMIN_TELEGRAM_ID_RAW:
+    ADMIN_TELEGRAM_ID_RAW = ADMIN_TELEGRAM_ID_RAW.strip()
+
 YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")
+if YANDEX_DISK_TOKEN:
+    YANDEX_DISK_TOKEN = YANDEX_DISK_TOKEN.strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///edits.db")
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
