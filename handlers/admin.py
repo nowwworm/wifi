@@ -16,10 +16,10 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
     """Returns the main admin control panel keyboard."""
     keyboard = [
         [
-            InlineKeyboardButton(text="Собрать изменения 📄", callback_data="admin_gather"),
-            InlineKeyboardButton(text="Статистика 📊", callback_data="admin_stats")
+            InlineKeyboardButton(text="Сформировать отчет в PDF 📄", callback_data="admin_gather")
         ],
         [
+            InlineKeyboardButton(text="Статистика 📊", callback_data="admin_stats"),
             InlineKeyboardButton(text="Принятые правки 📋", callback_data="admin_list_approved")
         ]
     ]
