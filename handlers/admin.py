@@ -30,6 +30,9 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="Принятые правки 📋", callback_data="admin_list_approved")
         ],
         [
+            InlineKeyboardButton(text="Отклонить правки ❌", callback_data="admin_list_pending_reject")
+        ],
+        [
             InlineKeyboardButton(text="Отменить решение ↩️", callback_data="admin_list_decisions")
         ]
     ]
@@ -251,6 +254,46 @@ async def process_list_approved(callback: CallbackQuery):
         text += f"{i}. **{username}** [{has_img}]:\n   _{text_preview}_\n\n"
         
     await callback.message.answer(text, reply_markup=get_admin_panel_markup(), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_list_pending_reject")
+async def process_list_pending_reject(callback: CallbackQuery):
+    """Lists pending edits and lets admin reject one with a button."""
+    async with async_session() as session:
+        query = (
+            select(Edit)
+            .where(Edit.status == "pending")
+            .order_by(Edit.created_at.desc())
+            .limit(10)
+        )
+        result = await session.execute(query)
+        edits = result.scalars().all()
+
+    if not edits:
+        await callback.message.answer("❌ Нет правок, ожидающих отклонения.", reply_markup=get_admin_panel_markup())
+        await callback.answer()
+        return
+
+    text = "❌ **Ожидающие правки, которые можно отклонить:**\n\n"
+    keyboard = []
+
+    for edit in edits:
+        username = f"@{edit.client_username}" if edit.client_username else f"ID {edit.client_id}"
+        text_preview = edit.text_content[:45] + "..." if edit.text_content and len(edit.text_content) > 45 else (edit.text_content or "[Изображение]")
+        text += f"#{edit.id} — {username}\n_{text_preview}_\n\n"
+        keyboard.append([
+            InlineKeyboardButton(text=f"Отклонить #{edit.id} ❌", callback_data=f"reject:{edit.id}")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_stats")
+    ])
+
+    await callback.message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "admin_list_decisions")
