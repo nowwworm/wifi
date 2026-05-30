@@ -5,7 +5,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, F
 from aiogram.filters import CommandStart
 from database.connection import async_session
 from database.models import Edit
-from config import ADMIN_TELEGRAM_ID
+from config import ADMIN_TELEGRAM_IDS, is_admin
 
 router = Router()
 
@@ -22,7 +22,7 @@ def get_admin_markup(edit_id: int) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-@router.message(CommandStart(), lambda msg: msg.from_user.id != ADMIN_TELEGRAM_ID)
+@router.message(CommandStart(), lambda msg: not is_admin(msg.from_user.id))
 async def cmd_start_client(message: Message):
     """Greets the client and explains how to send edits."""
     text = (
@@ -34,7 +34,7 @@ async def cmd_start_client(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
-@router.message(lambda msg: msg.from_user.id != ADMIN_TELEGRAM_ID)
+@router.message(lambda msg: not is_admin(msg.from_user.id))
 async def process_client_edit(message: Message, bot: Bot):
     """Processes incoming edits (text and/or photos) from the client."""
     text_content = message.text or message.caption or ""
@@ -88,22 +88,23 @@ async def process_client_edit(message: Message, bot: Bot):
     markup = get_admin_markup(edit_id)
     
     try:
-        if image_path and os.path.exists(image_path):
-            # Send photo with markup
-            await bot.send_photo(
-                chat_id=ADMIN_TELEGRAM_ID,
-                photo=FSInputFile(image_path),
-                caption=admin_caption[:1024],  # Telegram caption limit is 1024
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
-        else:
-            # Send text message
-            await bot.send_message(
-                chat_id=ADMIN_TELEGRAM_ID,
-                text=admin_caption,
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
+        for admin_id in ADMIN_TELEGRAM_IDS:
+            if image_path and os.path.exists(image_path):
+                # Send photo with markup
+                await bot.send_photo(
+                    chat_id=admin_id,
+                    photo=FSInputFile(image_path),
+                    caption=admin_caption[:1024],  # Telegram caption limit is 1024
+                    reply_markup=markup,
+                    parse_mode="HTML"
+                )
+            else:
+                # Send text message
+                await bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_caption,
+                    reply_markup=markup,
+                    parse_mode="HTML"
+                )
     except Exception as e:
         logger.error(f"Error sending notification to admin: {e}", exc_info=True)

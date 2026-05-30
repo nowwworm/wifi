@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from sqlalchemy import select, func, update
 from database.connection import async_session
 from database.models import Edit
-from config import ADMIN_TELEGRAM_ID
+from config import ADMIN_TELEGRAM_IDS, is_admin
 from utils.pdf_generator import generate_edits_pdf
 from utils.yandex_disk import upload_file_to_yandex_disk
 
@@ -62,8 +62,8 @@ def format_status_text(raw_text: str, status: str) -> str:
     base_text = raw_text.split("\n\nСтатус:")[0].split("\n\n<b>Статус:")[0]
     return html.escape(base_text) + f"\n\n<b>Статус: {STATUS_LABELS.get(status, status)}</b>"
 
-@router.message(Command("admin"), lambda msg: msg.from_user.id == ADMIN_TELEGRAM_ID)
-@router.message(Command("start"), lambda msg: msg.from_user.id == ADMIN_TELEGRAM_ID)
+@router.message(Command("admin"), lambda msg: is_admin(msg.from_user.id))
+@router.message(Command("start"), lambda msg: is_admin(msg.from_user.id))
 async def cmd_admin_panel(message: Message):
     """Shows the admin panel to the authorized administrator."""
     text = (
@@ -367,11 +367,12 @@ async def process_gather_changes(callback: CallbackQuery, bot: Bot):
         remote_path = await upload_file_to_yandex_disk(pdf_local_path, pdf_filename, yandex_folder)
         
         # 4. Send document to Admin in chat
-        await bot.send_document(
-            chat_id=ADMIN_TELEGRAM_ID,
-            document=FSInputFile(pdf_local_path),
-            caption=f"📄 Сборка правок от {datetime.now().strftime('%d.%m.%Y %H:%M')}\nУспешно загружено на Яндекс.Диск в `/Приложения/FeoSportBot/{remote_path}`"
-        )
+        for admin_id in ADMIN_TELEGRAM_IDS:
+            await bot.send_document(
+                chat_id=admin_id,
+                document=FSInputFile(pdf_local_path),
+                caption=f"📄 Сборка правок от {datetime.now().strftime('%d.%m.%Y %H:%M')}\nУспешно загружено на Яндекс.Диск в `/Приложения/FeoSportBot/{remote_path}`"
+            )
         
         # 5. Archive edits and delete local image downloads
         async with async_session() as session:
