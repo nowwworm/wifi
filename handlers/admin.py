@@ -12,6 +12,13 @@ from utils.yandex_disk import upload_file_to_yandex_disk
 
 router = Router()
 
+STATUS_LABELS = {
+    "pending": "Ожидает модерации ⏳",
+    "approved": "Принята ✅",
+    "rejected": "Отклонена ❌",
+    "archived": "Выгружена в архив 📦",
+}
+
 def get_admin_panel_markup() -> InlineKeyboardMarkup:
     """Returns the main admin control panel keyboard."""
     keyboard = [
@@ -21,9 +28,36 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="Статистика 📊", callback_data="admin_stats"),
             InlineKeyboardButton(text="Принятые правки 📋", callback_data="admin_list_approved")
+        ],
+        [
+            InlineKeyboardButton(text="Отменить решение ↩️", callback_data="admin_list_decisions")
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_moderation_markup(edit_id: int) -> InlineKeyboardMarkup:
+    """Returns approve/reject buttons for a pending edit."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Принять ✅", callback_data=f"approve:{edit_id}"),
+            InlineKeyboardButton(text="Отклонить ❌", callback_data=f"reject:{edit_id}")
+        ]
+    ])
+
+def get_undo_markup(edit_id: int) -> InlineKeyboardMarkup:
+    """Returns an undo button for a moderated edit."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Отменить решение ↩️", callback_data=f"undo:{edit_id}")
+        ]
+    ])
+
+def format_status_text(raw_text: str, status: str) -> str:
+    """Escapes a Telegram message and appends a current status line."""
+    import html
+
+    base_text = raw_text.split("\n\nСтатус:")[0].split("\n\n<b>Статус:")[0]
+    return html.escape(base_text) + f"\n\n<b>Статус: {STATUS_LABELS.get(status, status)}</b>"
 
 @router.message(Command("admin"), lambda msg: msg.from_user.id == ADMIN_TELEGRAM_ID)
 @router.message(Command("start"), lambda msg: msg.from_user.id == ADMIN_TELEGRAM_ID)
@@ -71,13 +105,12 @@ async def process_approve(callback: CallbackQuery, bot: Bot):
     # Update admin message
     await callback.answer("Правка принята!")
     raw_text = callback.message.text or callback.message.caption or ""
-    import html
-    new_text = html.escape(raw_text) + "\n\n<b>Статус: Принята ✅</b>"
+    new_text = format_status_text(raw_text, "approved")
     
     if callback.message.photo:
-        await callback.message.edit_caption(caption=new_text, reply_markup=None, parse_mode="HTML")
+        await callback.message.edit_caption(caption=new_text, reply_markup=get_undo_markup(edit_id), parse_mode="HTML")
     else:
-        await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="HTML")
+        await callback.message.edit_text(text=new_text, reply_markup=get_undo_markup(edit_id), parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("reject:"))
 async def process_reject(callback: CallbackQuery, bot: Bot):
@@ -114,13 +147,62 @@ async def process_reject(callback: CallbackQuery, bot: Bot):
     # Update admin message
     await callback.answer("Правка отклонена.")
     raw_text = callback.message.text or callback.message.caption or ""
-    import html
-    new_text = html.escape(raw_text) + "\n\n<b>Статус: Отклонена ❌</b>"
+    new_text = format_status_text(raw_text, "rejected")
     
     if callback.message.photo:
-        await callback.message.edit_caption(caption=new_text, reply_markup=None, parse_mode="HTML")
+        await callback.message.edit_caption(caption=new_text, reply_markup=get_undo_markup(edit_id), parse_mode="HTML")
     else:
-        await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="HTML")
+        await callback.message.edit_text(text=new_text, reply_markup=get_undo_markup(edit_id), parse_mode="HTML")
+
+@router.callback_query(F.data.startswith("undo:"))
+async def process_undo_decision(callback: CallbackQuery, bot: Bot):
+    """Returns an approved/rejected edit back to pending moderation."""
+    edit_id = int(callback.data.split(":")[1])
+
+    async with async_session() as session:
+        query = select(Edit).where(Edit.id == edit_id)
+        result = await session.execute(query)
+        edit = result.scalar_one_or_none()
+
+        if not edit:
+            await callback.answer("Правка не найдена в базе.", show_alert=True)
+            return
+
+        if edit.status == "pending":
+            await callback.answer("Эта правка уже ожидает модерации.", show_alert=True)
+            return
+
+        if edit.status == "archived":
+            await callback.answer("Нельзя отменить: правка уже выгружена в PDF-архив.", show_alert=True)
+            return
+
+        old_status = edit.status
+        edit.status = "pending"
+        await session.commit()
+
+        client_id = edit.client_id
+        text_preview = edit.text_content[:30] + "..." if edit.text_content and len(edit.text_content) > 30 else edit.text_content
+        client_msg = f"Решение по вашей правке «{text_preview or 'Изображение'}» отменено, она снова ожидает модерации. ↩️"
+
+    try:
+        await bot.send_message(chat_id=client_id, text=client_msg)
+    except Exception as e:
+        print(f"Failed to notify client {client_id}: {e}")
+
+    await callback.answer("Решение отменено, правка снова ожидает модерации.")
+
+    raw_text = callback.message.text or callback.message.caption or ""
+    if raw_text and "Новая правка #" in raw_text:
+        new_text = format_status_text(raw_text, "pending")
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=new_text, reply_markup=get_moderation_markup(edit_id), parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=new_text, reply_markup=get_moderation_markup(edit_id), parse_mode="HTML")
+    else:
+        await callback.message.answer(
+            f"↩️ Решение по правке #{edit_id} отменено: {old_status} → pending.",
+            reply_markup=get_admin_panel_markup()
+        )
 
 @router.callback_query(F.data == "admin_stats")
 async def process_stats(callback: CallbackQuery):
@@ -169,6 +251,47 @@ async def process_list_approved(callback: CallbackQuery):
         text += f"{i}. **{username}** [{has_img}]:\n   _{text_preview}_\n\n"
         
     await callback.message.answer(text, reply_markup=get_admin_panel_markup(), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_list_decisions")
+async def process_list_decisions(callback: CallbackQuery):
+    """Lists recent approved/rejected edits and lets admin undo a decision."""
+    async with async_session() as session:
+        query = (
+            select(Edit)
+            .where(Edit.status.in_(("approved", "rejected")))
+            .order_by(Edit.created_at.desc())
+            .limit(10)
+        )
+        result = await session.execute(query)
+        edits = result.scalars().all()
+
+    if not edits:
+        await callback.message.answer("↩️ Нет принятых или отклоненных правок для отмены.", reply_markup=get_admin_panel_markup())
+        await callback.answer()
+        return
+
+    text = "↩️ **Последние решения, которые можно отменить:**\n\n"
+    keyboard = []
+
+    for edit in edits:
+        username = f"@{edit.client_username}" if edit.client_username else f"ID {edit.client_id}"
+        status = STATUS_LABELS.get(edit.status, edit.status)
+        text_preview = edit.text_content[:45] + "..." if edit.text_content and len(edit.text_content) > 45 else (edit.text_content or "[Изображение]")
+        text += f"#{edit.id} — **{status}** — {username}\n_{text_preview}_\n\n"
+        keyboard.append([
+            InlineKeyboardButton(text=f"Отменить #{edit.id}", callback_data=f"undo:{edit.id}")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(text="Назад в админ-панель", callback_data="admin_stats")
+    ])
+
+    await callback.message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "admin_gather")
