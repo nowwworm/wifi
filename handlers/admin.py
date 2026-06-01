@@ -6,9 +6,10 @@ from aiogram.filters import Command
 from sqlalchemy import select, func, update
 from database.connection import async_session
 from database.models import Edit
-from config import ADMIN_TELEGRAM_IDS, is_admin
+from config import ADMIN_TELEGRAM_IDS, is_admin, GITHUB_TOKEN
 from utils.pdf_generator import generate_edits_pdf
 from utils.yandex_disk import upload_file_to_yandex_disk
+from utils.github import export_edit_to_github
 
 router = Router()
 
@@ -24,6 +25,9 @@ def get_admin_panel_markup() -> InlineKeyboardMarkup:
     keyboard = [
         [
             InlineKeyboardButton(text="Сформировать отчет в PDF 📄", callback_data="admin_gather")
+        ],
+        [
+            InlineKeyboardButton(text="Отправить на GitHub 🐙", callback_data="admin_github_push")
         ],
         [
             InlineKeyboardButton(text="Статистика 📊", callback_data="admin_stats"),
@@ -405,3 +409,63 @@ async def process_gather_changes(callback: CallbackQuery, bot: Bot):
                 os.remove(pdf_local_path)
             except Exception as e:
                 print(f"Failed to remove local PDF: {e}")
+
+@router.callback_query(F.data == "admin_github_push")
+async def process_github_push(callback: CallbackQuery, bot: Bot):
+    """Pushes approved edits to GitHub, notifies admins, archives edits, and deletes temp files."""
+    if not GITHUB_TOKEN:
+        await callback.answer("Ошибка: GITHUB_TOKEN не настроен в конфигурации!", show_alert=True)
+        return
+
+    # 1. Fetch approved edits
+    async with async_session() as session:
+        query = select(Edit).where(Edit.status == "approved").order_by(Edit.created_at)
+        result = await session.execute(query)
+        approved_edits = result.scalars().all()
+        
+    if not approved_edits:
+        await callback.answer("Нет принятых правок для выгрузки на GitHub!", show_alert=True)
+        return
+        
+    await callback.message.answer("⏳ Начинаю выгрузку правок на GitHub...")
+    await callback.answer()
+    
+    success_count = 0
+    failed_edits = []
+    
+    for edit in approved_edits:
+        try:
+            await export_edit_to_github(edit)
+            
+            # Archive edit and delete local image file if uploaded successfully
+            async with async_session() as session_edit:
+                db_edit = await session_edit.get(Edit, edit.id)
+                if db_edit:
+                    db_edit.status = "archived"
+                    await session_edit.commit()
+                    
+            if edit.image_path and os.path.exists(edit.image_path):
+                try:
+                    os.remove(edit.image_path)
+                except Exception as clean_err:
+                    print(f"Error removing file {edit.image_path}: {clean_err}")
+            
+            success_count += 1
+        except Exception as err:
+            print(f"Failed to export edit #{edit.id} to GitHub: {err}")
+            failed_edits.append((edit.id, str(err)))
+
+    if success_count > 0:
+        msg = f"✅ Успешно выгружено на GitHub правок: {success_count}."
+        if failed_edits:
+            msg += f"\n❌ Не удалось выгрузить: {len(failed_edits)}.\nОшибки:\n"
+            for edit_id, err_msg in failed_edits:
+                msg += f"- Правка #{edit_id}: `{err_msg}`\n"
+        await callback.message.answer(msg, reply_markup=get_admin_panel_markup())
+    else:
+        await callback.message.answer(
+            f"❌ Не удалось выгрузить ни одной правки на GitHub.\n"
+            f"Ошибка: `{failed_edits[0][1]}`",
+            reply_markup=get_admin_panel_markup()
+        )
+

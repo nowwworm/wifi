@@ -19,6 +19,19 @@ if ADMIN_TELEGRAM_IDS_RAW:
 YANDEX_DISK_TOKEN = os.getenv("YANDEX_DISK_TOKEN")
 if YANDEX_DISK_TOKEN:
     YANDEX_DISK_TOKEN = YANDEX_DISK_TOKEN.strip()
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+if GITHUB_TOKEN:
+    GITHUB_TOKEN = GITHUB_TOKEN.strip()
+
+GITHUB_REPO = os.getenv("GITHUB_REPO", "nowwworm/feosport2")
+if GITHUB_REPO:
+    GITHUB_REPO = GITHUB_REPO.strip()
+
+GITHUB_FOLDER = os.getenv("GITHUB_FOLDER", "edits")
+if GITHUB_FOLDER:
+    GITHUB_FOLDER = GITHUB_FOLDER.strip()
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///edits.db")
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
